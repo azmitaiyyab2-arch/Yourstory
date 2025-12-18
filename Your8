@@ -1,0 +1,660 @@
+const express = require('express');
+const router = express.Router();
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const Video = require('../models/Video');
+const User = require('../models/User');
+const auth = require('../middleware/auth');
+const { v4: uuidv4 } = require('uuid');
+
+// Ensure upload directories exist
+const ensureDirExists = (dir) => {
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+};
+
+// Configure storage
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        const uploadPath = path.join(__dirname, '../uploads/videos');
+        ensureDirExists(uploadPath);
+        cb(null, uploadPath);
+    },
+    filename: function (req, file, cb) {
+        const uniqueName = `${Date.now()}-${uuidv4()}${path.extname(file.originalname)}`;
+        cb(null, uniqueName);
+    }
+});
+
+// File filter
+const fileFilter = (req, file, cb) => {
+    const allowedTypes = [
+        'video/mp4', 'video/webm', 'video/ogg', 
+        'video/quicktime', 'video/x-msvideo', 'video/x-matroska'
+    ];
+    
+    if (allowedTypes.includes(file.mimetype)) {
+        cb(null, true);
+    } else {
+        cb(new Error('Invalid file type. Only video files are allowed.'), false);
+    }
+};
+
+const upload = multer({ 
+    storage: storage,
+    fileFilter: fileFilter,
+    limits: { 
+        fileSize: parseInt(process.env.MAX_FILE_SIZE) || 2 * 1024 * 1024 * 1024 // 2GB
+    }
+});
+
+// @route   POST /api/videos/upload
+// @desc    Upload a video
+// @access  Private
+router.post('/upload', auth, upload.single('video'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ 
+                error: 'No video file provided' 
+            });
+        }
+
+        const { 
+            title, 
+            description, 
+            category, 
+            tags, 
+            visibility,
+            isMonetized 
+        } = req.body;
+        
+        if (!title || title.trim().length < 3) {
+            // Delete uploaded file if title is invalid
+            fs.unlinkSync(req.file.path);
+            return res.status(400).json({ 
+                error: 'Title must be at least 3 characters' 
+            });
+        }
+        
+        // Get user info
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            fs.unlinkSync(req.file.path);
+            return res.status(404).json({ 
+                error: 'User not found' 
+            });
+        }
+        
+        // Check upload limits based on subscription
+        if (user.subscription.plan === 'free') {
+            const videoCount = await Video.countDocuments({ uploader: user._id });
+            if (videoCount >= 10) {
+                fs.unlinkSync(req.file.path);
+                return res.status(403).json({ 
+                    error: 'Free plan limited to 10 videos. Upgrade to upload more.' 
+                });
+            }
+            
+            if (req.file.size > 500 * 1024 * 1024) { // 500MB limit for free
+                fs.unlinkSync(req.file.path);
+                return res.status(403).json({ 
+                    error: 'Free plan limited to 500MB per video. Upgrade for larger uploads.' 
+                });
+            }
+        }
+        
+        // Calculate duration (simplified - in production use ffmpeg)
+        const duration = Math.floor(Math.random() * 1800) + 60; // 1-30 min
+        
+        // Create video document
+        const video = new Video({
+            title: title.trim(),
+            description: description ? description.trim() : '',
+            videoUrl: `/uploads/videos/${req.file.filename}`,
+            thumbnailUrl: '/default-thumbnail.jpg',
+            duration,
+            size: req.file.size,
+            format: path.extname(req.file.originalname).substring(1).toLowerCase(),
+            category: category || 'Other',
+            tags: tags ? tags.split(',').map(tag => tag.trim().toLowerCase()).filter(tag => tag) : [],
+            visibility: visibility || 'public',
+            uploader: user._id,
+            monetization: {
+                isMonetized: isMonetized === 'true'
+            },
+            processing: {
+                status: 'pending',
+                progress: 0
+            }
+        });
+
+        await video.save();
+
+        // Update user's video count
+        await User.findByIdAndUpdate(user._id, {
+            $inc: { 'stats.totalVideos': 1 }
+        });
+
+        // Simulate video processing
+        setTimeout(async () => {
+            try {
+                await Video.findByIdAndUpdate(video._id, {
+                    'processing.status': 'completed',
+                    'processing.progress': 100,
+                    'processing.processedAt': new Date()
+                });
+                console.log(`✅ Video ${video._id} processing completed`);
+            } catch (error) {
+                console.error(`❌ Error updating video processing status:`, error);
+            }
+        }, 5000); // 5 seconds delay for demo
+
+        res.status(201).json({
+            success: true,
+            message: 'Video uploaded successfully. Processing has started.',
+            video: {
+                id: video._id,
+                title: video.title,
+                videoUrl: video.videoUrl,
+                thumbnailUrl: video.thumbnailUrl,
+                duration: video.durationFormatted,
+                size: video.sizeFormatted,
+                status: video.processing.status,
+                uploadDate: video.uploadDate
+            }
+        });
+    } catch (error) {
+        console.error('Video upload error:', error);
+        
+        // Clean up uploaded file on error
+        if (req.file && fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+        }
+        
+        if (error instanceof multer.MulterError) {
+            if (error.code === 'LIMIT_FILE_SIZE') {
+                return res.status(400).json({ 
+                    error: 'File too large. Maximum size is 2GB.' 
+                });
+            }
+            return res.status(400).json({ 
+                error: `Upload error: ${error.message}` 
+            });
+        }
+        
+        if (error.name === 'ValidationError') {
+            const errors = {};
+            Object.keys(error.errors).forEach(key => {
+                errors[key] = error.errors[key].message;
+            });
+            return res.status(400).json({ error: errors });
+        }
+        
+        res.status(500).json({ 
+            error: 'Server error during video upload' 
+        });
+    }
+});
+
+// @route   GET /api/videos
+// @desc    Get all public videos with pagination
+// @access  Public
+router.get('/', async (req, res) => {
+    try {
+        const { 
+            page = 1, 
+            limit = 12, 
+            category, 
+            search, 
+            sort = 'uploadDate',
+            order = 'desc'
+        } = req.query;
+        
+        // Build query
+        let query = { 
+            visibility: 'public',
+            'processing.status': 'completed',
+            isApproved: true 
+        };
+        
+        if (category && category !== 'all') {
+            query.category = category;
+        }
+        
+        if (search && search.trim()) {
+            query.$text = { $search: search.trim() };
+        }
+        
+        // Build sort object
+        const sortOrder = order === 'asc' ? 1 : -1;
+        const sortObj = {};
+        sortObj[sort] = sortOrder;
+        
+        // Execute query with pagination
+        const videos = await Video.find(query)
+            .populate('uploader', 'name channelName avatar stats')
+            .sort(sortObj)
+            .skip((parseInt(page) - 1) * parseInt(limit))
+            .limit(parseInt(limit))
+            .lean(); // For better performance
+        
+        // Get total count
+        const total = await Video.countDocuments(query);
+        
+        // Calculate total pages
+        const totalPages = Math.ceil(total / parseInt(limit));
+        
+        res.json({
+            success: true,
+            videos,
+            pagination: {
+                total,
+                page: parseInt(page),
+                limit: parseInt(limit),
+                totalPages,
+                hasNextPage: parseInt(page) < totalPages,
+                hasPrevPage: parseInt(page) > 1
+            }
+        });
+    } catch (error) {
+        console.error('Get videos error:', error);
+        res.status(500).json({ 
+            error: 'Server error fetching videos' 
+        });
+    }
+});
+
+// @route   GET /api/videos/:id
+// @desc    Get video by ID
+// @access  Public
+router.get('/:id', async (req, res) => {
+    try {
+        const video = await Video.findById(req.params.id)
+            .populate('uploader', 'name channelName avatar bio stats socialLinks subscription');
+        
+        if (!video) {
+            return res.status(404).json({ 
+                error: 'Video not found' 
+            });
+        }
+        
+        // Check visibility
+        if (video.visibility === 'private') {
+            return res.status(403).json({ 
+                error: 'This video is private' 
+            });
+        }
+        
+        // Increment view count
+        video.stats.views += 1;
+        
+        // Simulate watch time (random 30-80% of duration)
+        const watchPercentage = 0.3 + Math.random() * 0.5; // 30-80%
+        video.stats.watchTime += Math.floor(video.duration * watchPercentage);
+        
+        await video.save();
+        
+        // Update uploader's total views
+        await User.findByIdAndUpdate(video.uploader._id, {
+            $inc: { 
+                'stats.totalViews': 1,
+                'stats.totalLikes': video.stats.likes
+            }
+        });
+        
+        // Get related videos
+        const relatedVideos = await Video.find({
+            _id: { $ne: video._id },
+            category: video.category,
+            visibility: 'public',
+            'processing.status': 'completed',
+            isApproved: true
+        })
+        .populate('uploader', 'name channelName avatar')
+        .limit(6)
+        .sort({ views: -1 });
+        
+        res.json({
+            success: true,
+            video,
+            relatedVideos
+        });
+    } catch (error) {
+        console.error('Get video error:', error);
+        
+        if (error.name === 'CastError') {
+            return res.status(400).json({ 
+                error: 'Invalid video ID' 
+            });
+        }
+        
+        res.status(500).json({ 
+            error: 'Server error fetching video' 
+        });
+    }
+});
+
+// @route   GET /api/videos/user/:userId
+// @desc    Get videos by specific user
+// @access  Public
+router.get('/user/:userId', async (req, res) => {
+    try {
+        const { page = 1, limit = 12 } = req.query;
+        
+        const videos = await Video.find({ 
+            uploader: req.params.userId,
+            visibility: 'public',
+            'processing.status': 'completed',
+            isApproved: true
+        })
+        .populate('uploader', 'name channelName avatar')
+        .sort({ uploadDate: -1 })
+        .skip((parseInt(page) - 1) * parseInt(limit))
+        .limit(parseInt(limit));
+        
+        const total = await Video.countDocuments({ 
+            uploader: req.params.userId,
+            visibility: 'public'
+        });
+        
+        const user = await User.findById(req.params.userId)
+            .select('name channelName avatar bio stats socialLinks');
+        
+        if (!user) {
+            return res.status(404).json({ 
+                error: 'User not found' 
+            });
+        }
+        
+        res.json({
+            success: true,
+            videos,
+            user,
+            pagination: {
+                total,
+                page: parseInt(page),
+                limit: parseInt(limit),
+                totalPages: Math.ceil(total / parseInt(limit))
+            }
+        });
+    } catch (error) {
+        console.error('Get user videos error:', error);
+        res.status(500).json({ 
+            error: 'Server error' 
+        });
+    }
+});
+
+// @route   GET /api/videos/my/videos
+// @desc    Get current user's videos
+// @access  Private
+router.get('/my/videos', auth, async (req, res) => {
+    try {
+        const { status = 'all', page = 1, limit = 12 } = req.query;
+        
+        let query = { uploader: req.user.userId };
+        
+        if (status !== 'all') {
+            if (status === 'processing') {
+                query['processing.status'] = { $in: ['pending', 'processing'] };
+            } else if (status === 'published') {
+                query['processing.status'] = 'completed';
+                query.visibility = 'public';
+            } else if (status === 'private') {
+                query.visibility = 'private';
+            } else if (status === 'unlisted') {
+                query.visibility = 'unlisted';
+            }
+        }
+        
+        const videos = await Video.find(query)
+            .sort({ uploadDate: -1 })
+            .skip((parseInt(page) - 1) * parseInt(limit))
+            .limit(parseInt(limit));
+        
+        const total = await Video.countDocuments(query);
+        
+        // Get stats
+        const stats = {
+            total: await Video.countDocuments({ uploader: req.user.userId }),
+            published: await Video.countDocuments({ 
+                uploader: req.user.userId,
+                'processing.status': 'completed',
+                visibility: 'public'
+            }),
+            private: await Video.countDocuments({ 
+                uploader: req.user.userId,
+                visibility: 'private'
+            }),
+            unlisted: await Video.countDocuments({ 
+                uploader: req.user.userId,
+                visibility: 'unlisted'
+            }),
+            processing: await Video.countDocuments({ 
+                uploader: req.user.userId,
+                'processing.status': { $in: ['pending', 'processing'] }
+            })
+        };
+        
+        res.json({
+            success: true,
+            videos,
+            stats,
+            pagination: {
+                total,
+                page: parseInt(page),
+                limit: parseInt(limit),
+                totalPages: Math.ceil(total / parseInt(limit))
+            }
+        });
+    } catch (error) {
+        console.error('Get my videos error:', error);
+        res.status(500).json({ 
+            error: 'Server error' 
+        });
+    }
+});
+
+// @route   PUT /api/videos/:id
+// @desc    Update video details
+// @access  Private
+router.put('/:id', auth, async (req, res) => {
+    try {
+        const video = await Video.findById(req.params.id);
+        
+        if (!video) {
+            return res.status(404).json({ 
+                error: 'Video not found' 
+            });
+        }
+        
+        // Check ownership
+        if (video.uploader.toString() !== req.user.userId && req.user.role !== 'admin') {
+            return res.status(403).json({ 
+                error: 'Not authorized to update this video' 
+            });
+        }
+        
+        const { 
+            title, 
+            description, 
+            category, 
+            tags, 
+            visibility,
+            isMonetized 
+        } = req.body;
+        
+        // Update fields
+        if (title && title.trim().length >= 3) {
+            video.title = title.trim();
+        }
+        
+        if (description !== undefined) {
+            video.description = description.trim();
+        }
+        
+        if (category) {
+            video.category = category;
+        }
+        
+        if (tags !== undefined) {
+            video.tags = tags.split(',').map(tag => tag.trim().toLowerCase()).filter(tag => tag);
+        }
+        
+        if (visibility && ['public', 'private', 'unlisted'].includes(visibility)) {
+            video.visibility = visibility;
+        }
+        
+        if (isMonetized !== undefined) {
+            video.monetization.isMonetized = isMonetized === 'true';
+        }
+        
+        await video.save();
+        
+        res.json({
+            success: true,
+            message: 'Video updated successfully',
+            video
+        });
+    } catch (error) {
+        console.error('Update video error:', error);
+        
+        if (error.name === 'ValidationError') {
+            const errors = {};
+            Object.keys(error.errors).forEach(key => {
+                errors[key] = error.errors[key].message;
+            });
+            return res.status(400).json({ error: errors });
+        }
+        
+        if (error.name === 'CastError') {
+            return res.status(400).json({ 
+                error: 'Invalid video ID' 
+            });
+        }
+        
+        res.status(500).json({ 
+            error: 'Server error updating video' 
+        });
+    }
+});
+
+// @route   DELETE /api/videos/:id
+// @desc    Delete a video
+// @access  Private
+router.delete('/:id', auth, async (req, res) => {
+    try {
+        const video = await Video.findById(req.params.id);
+        
+        if (!video) {
+            return res.status(404).json({ 
+                error: 'Video not found' 
+            });
+        }
+        
+        // Check ownership
+        if (video.uploader.toString() !== req.user.userId && req.user.role !== 'admin') {
+            return res.status(403).json({ 
+                error: 'Not authorized to delete this video' 
+            });
+        }
+        
+        // Delete video file from storage
+        const videoPath = path.join(__dirname, '..', video.videoUrl);
+        if (fs.existsSync(videoPath)) {
+            fs.unlinkSync(videoPath);
+        }
+        
+        // Delete thumbnail if not default
+        if (video.thumbnailUrl && !video.thumbnailUrl.includes('default-thumbnail')) {
+            const thumbPath = path.join(__dirname, '..', video.thumbnailUrl);
+            if (fs.existsSync(thumbPath)) {
+                fs.unlinkSync(thumbPath);
+            }
+        }
+        
+        // Delete from database
+        await video.deleteOne();
+        
+        // Update user's video count
+        await User.findByIdAndUpdate(req.user.userId, {
+            $inc: { 'stats.totalVideos': -1 }
+        });
+        
+        res.json({
+            success: true,
+            message: 'Video deleted successfully'
+        });
+    } catch (error) {
+        console.error('Delete video error:', error);
+        
+        if (error.name === 'CastError') {
+            return res.status(400).json({ 
+                error: 'Invalid video ID' 
+            });
+        }
+        
+        res.status(500).json({ 
+            error: 'Server error deleting video' 
+        });
+    }
+});
+
+// @route   POST /api/videos/:id/like
+// @desc    Like a video
+// @access  Private
+router.post('/:id/like', auth, async (req, res) => {
+    try {
+        const video = await Video.findById(req.params.id);
+        
+        if (!video) {
+            return res.status(404).json({ 
+                error: 'Video not found' 
+            });
+        }
+        
+        // Check if already liked (simplified - in production use a separate model)
+        video.stats.likes += 1;
+        await video.save();
+        
+        res.json({
+            success: true,
+            message: 'Video liked',
+            likes: video.stats.likes
+        });
+    } catch (error) {
+        console.error('Like video error:', error);
+        res.status(500).json({ 
+            error: 'Server error' 
+        });
+    }
+});
+
+// @route   GET /api/videos/categories
+// @desc    Get all video categories
+// @access  Public
+router.get('/categories', async (req, res) => {
+    try {
+        const categories = [
+            'Education', 'Entertainment', 'Technology', 'Music',
+            'Gaming', 'Sports', 'Lifestyle', 'News', 'Comedy',
+            'Film & Animation', 'Science & Technology', 'Howto & Style',
+            'Travel & Events', 'Autos & Vehicles', 'Pets & Animals',
+            'Nonprofits & Activism', 'People & Blogs', 'Other'
+        ];
+        
+        res.json({
+            success: true,
+            categories
+        });
+    } catch (error) {
+        console.error('Get categories error:', error);
+        res.status(500).json({ 
+            error: 'Server error' 
+        });
+    }
+});
+
+module.exports = router;
