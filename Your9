@@ -1,0 +1,526 @@
+const express = require('express');
+const router = express.Router();
+const Razorpay = require('razorpay');
+const Subscription = require('../models/Subscription');
+const User = require('../models/User');
+const auth = require('../middleware/auth');
+
+// Initialize Razorpay
+const razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET
+});
+
+// @route   POST /api/subscriptions/create-order
+// @desc    Create Razorpay order for subscription
+// @access  Private
+router.post('/create-order', auth, async (req, res) => {
+    try {
+        const { plan, amount } = req.body;
+        
+        // Validate plan
+        const validPlans = ['monthly', 'yearly', 'lifetime'];
+        if (!validPlans.includes(plan)) {
+            return res.status(400).json({ 
+                error: 'Invalid subscription plan' 
+            });
+        }
+        
+        // Validate amount
+        const amountNum = parseFloat(amount);
+        if (isNaN(amountNum) || amountNum < 1) {
+            return res.status(400).json({ 
+                error: 'Invalid amount' 
+            });
+        }
+        
+        // Create Razorpay order
+        const options = {
+            amount: amountNum * 100, // Convert to paise
+            currency: 'INR',
+            receipt: `receipt_${Date.now()}_${req.user.userId}`,
+            notes: {
+                userId: req.user.userId,
+                plan: plan,
+                type: 'subscription'
+            }
+        };
+        
+        const order = await razorpay.orders.create(options);
+        
+        res.json({
+            success: true,
+            order: {
+                id: order.id,
+                amount: order.amount,
+                currency: order.currency,
+                receipt: order.receipt
+            }
+        });
+    } catch (error) {
+        console.error('Razorpay order error:', error);
+        
+        if (error.error && error.error.description) {
+            return res.status(400).json({ 
+                error: error.error.description 
+            });
+        }
+        
+        res.status(500).json({ 
+            error: 'Failed to create payment order' 
+        });
+    }
+});
+
+// @route   POST /api/subscriptions/verify-payment
+// @desc    Verify Razorpay payment
+// @access  Private
+router.post('/verify-payment', auth, async (req, res) => {
+    try {
+        const { 
+            razorpay_order_id, 
+            razorpay_payment_id, 
+            razorpay_signature, 
+            plan, 
+            amount 
+        } = req.body;
+        
+        // Validate input
+        if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+            return res.status(400).json({ 
+                error: 'Missing payment details' 
+            });
+        }
+        
+        // In production, verify the signature
+        // const crypto = require('crypto');
+        // const expectedSignature = crypto
+        //     .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        //     .update(razorpay_order_id + '|' + razorpay_payment_id)
+        //     .digest('hex');
+        
+        // if (expectedSignature !== razorpay_signature) {
+        //     return res.status(400).json({ error: 'Invalid payment signature' });
+        // }
+        
+        // For demo, we'll accept all payments
+        const user = await User.findById(req.user.userId);
+        if (!user) {
+            return res.status(404).json({ 
+                error: 'User not found' 
+            });
+        }
+        
+        // Calculate subscription dates
+        const startDate = new Date();
+        const endDate = new Date(startDate);
+        
+        switch (plan) {
+            case 'monthly':
+                endDate.setMonth(endDate.getMonth() + 1);
+                break;
+            case 'yearly':
+                endDate.setFullYear(endDate.getFullYear() + 1);
+                break;
+            case 'lifetime':
+                endDate.setFullYear(endDate.getFullYear() + 100); // 100 years
+                break;
+            default:
+                return res.status(400).json({ 
+                    error: 'Invalid plan type' 
+                });
+        }
+        
+        // Create subscription record
+        const subscription = new Subscription({
+            user: req.user.userId,
+            channel: req.user.userId, // Self-subscription for premium features
+            plan,
+            amount: parseFloat(amount),
+            currency: 'INR',
+            payment: {
+                gateway: 'razorpay',
+                paymentId: razorpay_payment_id,
+                orderId: razorpay_order_id,
+                signature: razorpay_signature,
+                status: 'completed'
+            },
+            status: 'active',
+            features: getPlanFeatures(plan),
+            startDate,
+            endDate,
+            renewalDate: plan !== 'lifetime' ? endDate : null,
+            isAutoRenew: plan !== 'lifetime'
+        });
+        
+        await subscription.save();
+        
+        // Update user's subscription
+        const subscriptionPlan = plan === 'lifetime' ? 'premium' : plan;
+        user.subscription = {
+            plan: subscriptionPlan,
+            startDate,
+            endDate,
+            razorpaySubscriptionId: razorpay_payment_id,
+            status: 'active'
+        };
+        
+        await user.save();
+        
+        res.json({
+            success: true,
+            message: 'Payment verified and subscription activated successfully',
+            subscription: {
+                id: subscription._id,
+                plan,
+                amount,
+                startDate,
+                endDate,
+                status: 'active'
+            },
+            user: {
+                subscription: user.subscription
+            }
+        });
+    } catch (error) {
+        console.error('Payment verification error:', error);
+        res.status(500).json({ 
+            error: 'Payment verification failed' 
+        });
+    }
+});
+
+// Helper function to get plan features
+function getPlanFeatures(plan) {
+    const baseFeatures = {
+        maxVideoSize: 500 * 1024 * 1024, // 500MB
+        maxVideos: 10,
+        customBranding: false,
+        analytics: false,
+        prioritySupport: false,
+        adFree: false
+    };
+    
+    switch (plan) {
+        case 'monthly':
+            return {
+                ...baseFeatures,
+                maxVideoSize: 2 * 1024 * 1024 * 1024, // 2GB
+                maxVideos: 50,
+                analytics: true,
+                prioritySupport: true
+            };
+        case 'yearly':
+            return {
+                ...baseFeatures,
+                maxVideoSize: 2 * 1024 * 1024 * 1024, // 2GB
+                maxVideos: 100,
+                customBranding: true,
+                analytics: true,
+                prioritySupport: true,
+                adFree: true
+            };
+        case 'lifetime':
+            return {
+                maxVideoSize: 5 * 1024 * 1024 * 1024, // 5GB
+                maxVideos: 1000,
+                customBranding: true,
+                analytics: true,
+                prioritySupport: true,
+                adFree: true
+            };
+        default:
+            return baseFeatures;
+    }
+}
+
+// @route   GET /api/subscriptions/my-subscription
+// @desc    Get current user's subscription
+// @access  Private
+router.get('/my-subscription', auth, async (req, res) => {
+    try {
+        const subscription = await Subscription.findOne({
+            user: req.user.userId,
+            status: 'active'
+        }).sort({ startDate: -1 });
+        
+        const user = await User.findById(req.user.userId)
+            .select('subscription');
+        
+        // Get subscription plans
+        const plans = [
+            {
+                id: 'free',
+                name: 'Free Plan',
+                price: 0,
+                period: 'forever',
+                features: [
+                    '500MB max video size',
+                    '10 videos limit',
+                    'Basic analytics',
+                    'Community support'
+                ]
+            },
+            {
+                id: 'monthly',
+                name: 'Monthly Pro',
+                price: 299,
+                period: 'month',
+                features: [
+                    '2GB max video size',
+                    '50 videos limit',
+                    'Advanced analytics',
+                    'Priority support',
+                    'Custom thumbnails'
+                ]
+            },
+            {
+                id: 'yearly',
+                name: 'Yearly Premium',
+                price: 2999,
+                period: 'year',
+                features: [
+                    '2GB max video size',
+                    '100 videos limit',
+                    'Advanced analytics',
+                    'Priority support',
+                    'Custom branding',
+                    'Ad-free experience',
+                    'Monetization enabled'
+                ]
+            },
+            {
+                id: 'lifetime',
+                name: 'Lifetime',
+                price: 9999,
+                period: 'lifetime',
+                features: [
+                    '5GB max video size',
+                    'Unlimited videos',
+                    'All premium features',
+                    'Dedicated support',
+                    'Revenue sharing',
+                    'Early access to features'
+                ]
+            }
+        ];
+        
+        res.json({
+            success: true,
+            activeSubscription: subscription,
+            userSubscription: user.subscription,
+            plans
+        });
+    } catch (error) {
+        console.error('Get subscription error:', error);
+        res.status(500).json({ 
+            error: 'Server error fetching subscription' 
+        });
+    }
+});
+
+// @route   POST /api/subscriptions/channel/:channelId/subscribe
+// @desc    Subscribe to a channel
+// @access  Private
+router.post('/channel/:channelId/subscribe', auth, async (req, res) => {
+    try {
+        const channelId = req.params.channelId;
+        
+        // Check if channel exists
+        const channel = await User.findById(channelId);
+        if (!channel) {
+            return res.status(404).json({ 
+                error: 'Channel not found' 
+            });
+        }
+        
+        // Can't subscribe to yourself
+        if (channelId === req.user.userId) {
+            return res.status(400).json({ 
+                error: 'Cannot subscribe to your own channel' 
+            });
+        }
+        
+        // Check if already subscribed
+        const existingSubscription = await Subscription.findOne({
+            user: req.user.userId,
+            channel: channelId,
+            status: 'active'
+        });
+        
+        if (existingSubscription) {
+            // Unsubscribe
+            existingSubscription.status = 'cancelled';
+            existingSubscription.cancelledAt = new Date();
+            await existingSubscription.save();
+            
+            // Update channel subscriber count
+            await User.findByIdAndUpdate(channelId, {
+                $inc: { 'stats.totalSubscribers': -1 }
+            });
+            
+            return res.json({
+                success: true,
+                message: 'Unsubscribed from channel',
+                subscribed: false
+            });
+        }
+        
+        // Create free subscription (channel subscription)
+        const subscription = new Subscription({
+            user: req.user.userId,
+            channel: channelId,
+            plan: 'free',
+            amount: 0,
+            currency: 'INR',
+            payment: {
+                gateway: 'free',
+                status: 'completed'
+            },
+            status: 'active',
+            features: {
+                maxVideoSize: 0,
+                maxVideos: 0,
+                customBranding: false,
+                analytics: false,
+                prioritySupport: false,
+                adFree: false
+            },
+            startDate: new Date(),
+            endDate: new Date(2030, 0, 1), // Far future
+            isAutoRenew: false
+        });
+        
+        await subscription.save();
+        
+        // Update channel's subscriber count
+        await User.findByIdAndUpdate(channelId, {
+            $inc: { 'stats.totalSubscribers': 1 }
+        });
+        
+        res.json({
+            success: true,
+            message: 'Subscribed to channel successfully',
+            subscribed: true,
+            subscriptionId: subscription._id
+        });
+    } catch (error) {
+        console.error('Channel subscription error:', error);
+        res.status(500).json({ 
+            error: 'Subscription failed' 
+        });
+    }
+});
+
+// @route   GET /api/subscriptions/channel/:channelId
+// @desc    Get channel subscribers
+// @access  Public
+router.get('/channel/:channelId', async (req, res) => {
+    try {
+        const { page = 1, limit = 20 } = req.query;
+        
+        const subscribers = await Subscription.find({
+            channel: req.params.channelId,
+            status: 'active'
+        })
+        .populate('user', 'name avatar channelName')
+        .sort({ startDate: -1 })
+        .skip((parseInt(page) - 1) * parseInt(limit))
+        .limit(parseInt(limit));
+        
+        const count = await Subscription.countDocuments({
+            channel: req.params.channelId,
+            status: 'active'
+        });
+        
+        res.json({
+            success: true,
+            subscribers,
+            count,
+            pagination: {
+                total: count,
+                page: parseInt(page),
+                limit: parseInt(limit),
+                totalPages: Math.ceil(count / parseInt(limit))
+            }
+        });
+    } catch (error) {
+        console.error('Get channel subscribers error:', error);
+        res.status(500).json({ 
+            error: 'Server error' 
+        });
+    }
+});
+
+// @route   GET /api/subscriptions/my-channels
+// @desc    Get channels user is subscribed to
+// @access  Private
+router.get('/my-channels', auth, async (req, res) => {
+    try {
+        const subscriptions = await Subscription.find({
+            user: req.user.userId,
+            status: 'active',
+            channel: { $ne: req.user.userId } // Exclude self subscription
+        })
+        .populate('channel', 'name avatar channelName stats')
+        .sort({ startDate: -1 });
+        
+        res.json({
+            success: true,
+            subscriptions
+        });
+    } catch (error) {
+        console.error('Get my channels error:', error);
+        res.status(500).json({ 
+            error: 'Server error' 
+        });
+    }
+});
+
+// @route   POST /api/subscriptions/cancel
+// @desc    Cancel subscription
+// @access  Private
+router.post('/cancel', auth, async (req, res) => {
+    try {
+        const subscription = await Subscription.findOne({
+            user: req.user.userId,
+            status: 'active',
+            plan: { $in: ['monthly', 'yearly'] }
+        });
+        
+        if (!subscription) {
+            return res.status(404).json({ 
+                error: 'No active subscription found' 
+            });
+        }
+        
+        // Update subscription
+        subscription.status = 'cancelled';
+        subscription.cancelledAt = new Date();
+        subscription.isAutoRenew = false;
+        await subscription.save();
+        
+        // Update user
+        await User.findByIdAndUpdate(req.user.userId, {
+            'subscription.status': 'cancelled'
+        });
+        
+        res.json({
+            success: true,
+            message: 'Subscription cancelled successfully',
+            subscription: {
+                id: subscription._id,
+                plan: subscription.plan,
+                endDate: subscription.endDate,
+                status: 'cancelled'
+            }
+        });
+    } catch (error) {
+        console.error('Cancel subscription error:', error);
+        res.status(500).json({ 
+            error: 'Failed to cancel subscription' 
+        });
+    }
+});
+
+module.exports = router;
