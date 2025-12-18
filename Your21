@@ -1,0 +1,221 @@
+import React, { useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import { toast } from 'react-toastify';
+import { 
+  Mail, 
+  Lock, 
+  Eye, 
+  EyeOff,
+  LogIn
+} from 'react-icons/fa';
+
+const Login = () => {
+  const { login } = useAuth();
+  const navigate = useNavigate();
+  
+  const [formData, setFormData] = useState({
+    email: '',
+    password: ''
+  });
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const handleChange = (e) => {
+    setFormData({
+      ...formData,
+      [e.target.name]: e.target.value
+    });
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    
+    if (!formData.email || !formData.password) {
+      toast.error('Please fill in all fields');
+      return;
+    }
+
+    setLoading(true);
+    
+    const result = await login(formData.email, formData.password);
+    
+    if (result.success) {
+      toast.success('Login successful!');
+      navigate('/dashboard');
+    } else {
+      toast.error(result.error || 'Login failed');
+    }
+    
+    setLoading(false);
+  };
+
+  const handleDemoLogin = async (type) => {
+    const demoAccounts = {
+      user: { email: 'user@demo.com', password: 'password123' },
+      creator: { email: 'creator@demo.com', password: 'password123' },
+      admin: { email: 'admin@demo.com', password: 'password123' }
+    };
+    
+    setLoading(true);
+    const account = demoAccounts[type];
+    setFormData(account);
+    
+    const result = await login(account.email, account.password);
+    
+    if (result.success) {
+      toast.success(`Logged in as ${type}`);
+      navigate('/dashboard');
+    } else {
+      toast.error('Demo login failed');
+    }
+    
+    setLoading(false);
+  };
+
+  return (
+    <div className="auth-page">
+      <div className="auth-container">
+        <div className="auth-left">
+          <div className="auth-hero">
+            <h1>Welcome Back</h1>
+            <p>Sign in to access your video dashboard, analytics, and upload new content.</p>
+            
+            <div className="demo-login">
+              <h3>Try Demo Accounts:</h3>
+              <div className="demo-buttons">
+                <button 
+                  className="btn demo-btn user"
+                  onClick={() => handleDemoLogin('user')}
+                  disabled={loading}
+                >
+                  Regular User
+                </button>
+                <button 
+                  className="btn demo-btn creator"
+                  onClick={() => handleDemoLogin('creator')}
+                  disabled={loading}
+                >
+                  Content Creator
+                </button>
+                <button 
+                  className="btn demo-btn admin"
+                  onClick={() => handleDemoLogin('admin')}
+                  disabled={loading}
+                >
+                  Admin
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div className="auth-right">
+          <div className="auth-card">
+            <div className="auth-header">
+              <h2>Sign In</h2>
+              <p>Enter your credentials to continue</p>
+            </div>
+            
+            <form onSubmit={handleSubmit} className="auth-form">
+              <div className="form-group">
+                <label className="form-label">
+                  <Mail size={16} />
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  name="email"
+                  value={formData.email}
+                  onChange={handleChange}
+                  placeholder="you@example.com"
+                  className="form-control"
+                  required
+                />
+              </div>
+              
+              <div className="form-group">
+                <label className="form-label">
+                  <Lock size={16} />
+                  Password
+                </label>
+                <div className="password-input">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    name="password"
+                    value={formData.password}
+                    onChange={handleChange}
+                    placeholder="Enter your password"
+                    className="form-control"
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="password-toggle"
+                    onClick={() => setShowPassword(!showPassword)}
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+                <div className="form-help">
+                  <Link to="/forgot-password" className="forgot-link">
+                    Forgot password?
+                  </Link>
+                </div>
+              </div>
+              
+              <button
+                type="submit"
+                className="btn btn-primary w-100"
+                disabled={loading}
+              >
+                {loading ? (
+                  <>
+                    <div className="spinner-small"></div>
+                    Signing In...
+                  </>
+                ) : (
+                  <>
+                    <LogIn />
+                    Sign In
+                  </>
+                )}
+              </button>
+            </form>
+            
+            <div className="auth-divider">
+              <span>or</span>
+            </div>
+            
+            <div className="social-login">
+              <button className="btn social-btn google">
+                <img src="https://www.google.com/favicon.ico" alt="Google" />
+                Continue with Google
+              </button>
+              <button className="btn social-btn github">
+                <img src="https://github.com/favicon.ico" alt="GitHub" />
+                Continue with GitHub
+              </button>
+            </div>
+            
+            <div className="auth-footer">
+              <p>
+                Don't have an account?{' '}
+                <Link to="/register" className="auth-link">
+                  Sign up here
+                </Link>
+              </p>
+              <p className="terms">
+                By continuing, you agree to our{' '}
+                <Link to="/terms">Terms of Service</Link> and{' '}
+                <Link to="/privacy">Privacy Policy</Link>
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Login;
