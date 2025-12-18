@@ -1,0 +1,107 @@
+const mongoose = require('mongoose');
+
+const subscriptionSchema = new mongoose.Schema({
+    user: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+    },
+    channel: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+    },
+    plan: {
+        type: String,
+        enum: ['monthly', 'yearly', 'lifetime'],
+        required: true
+    },
+    amount: {
+        type: Number,
+        required: true,
+        min: [0, 'Amount cannot be negative']
+    },
+    currency: {
+        type: String,
+        default: 'INR'
+    },
+    payment: {
+        gateway: {
+            type: String,
+            enum: ['razorpay', 'stripe', 'paypal', 'free'],
+            default: 'razorpay'
+        },
+        paymentId: String,
+        orderId: String,
+        signature: String,
+        status: {
+            type: String,
+            enum: ['pending', 'completed', 'failed', 'refunded'],
+            default: 'pending'
+        }
+    },
+    status: {
+        type: String,
+        enum: ['active', 'cancelled', 'expired', 'pending'],
+        default: 'pending'
+    },
+    features: {
+        maxVideoSize: Number,
+        maxVideos: Number,
+        customBranding: Boolean,
+        analytics: Boolean,
+        prioritySupport: Boolean,
+        adFree: Boolean
+    },
+    startDate: {
+        type: Date,
+        default: Date.now
+    },
+    endDate: {
+        type: Date,
+        required: true
+    },
+    renewalDate: Date,
+    isAutoRenew: {
+        type: Boolean,
+        default: true
+    },
+    cancelledAt: Date,
+    cancellationReason: String,
+    notes: String,
+    createdAt: {
+        type: Date,
+        default: Date.now
+    },
+    updatedAt: {
+        type: Date,
+        default: Date.now
+    }
+});
+
+// Indexes
+subscriptionSchema.index({ user: 1, channel: 1 });
+subscriptionSchema.index({ status: 1, endDate: 1 });
+subscriptionSchema.index({ 'payment.status': 1 });
+
+// Update timestamp before saving
+subscriptionSchema.pre('save', function(next) {
+    this.updatedAt = Date.now();
+    next();
+});
+
+// Check if subscription is active
+subscriptionSchema.virtual('isActive').get(function() {
+    const now = new Date();
+    return this.status === 'active' && this.endDate > now;
+});
+
+// Calculate days remaining
+subscriptionSchema.virtual('daysRemaining').get(function() {
+    if (!this.isActive) return 0;
+    const now = new Date();
+    const diffTime = Math.abs(this.endDate - now);
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+});
+
+module.exports = mongoose.model('Subscription', subscriptionSchema);
