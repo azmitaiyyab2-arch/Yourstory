@@ -1,0 +1,226 @@
+import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
+import axios from 'axios';
+import { toast } from 'react-toastify';
+import { 
+  Play, 
+  TrendingUp,
+  Filter,
+  Sparkles
+} from 'react-icons/fa';
+import VideoCard from '../components/VideoCard';
+
+const HomePage = () => {
+  const [videos, setVideos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [categories, setCategories] = useState([]);
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [stats, setStats] = useState({
+    totalViews: 0,
+    totalVideos: 0,
+    totalUsers: 0,
+    totalEarnings: 0
+  });
+
+  useEffect(() => {
+    fetchVideos();
+    fetchCategories();
+    fetchStats();
+  }, [selectedCategory]);
+
+  const fetchVideos = async () => {
+    try {
+      setLoading(true);
+      const params = {
+        category: selectedCategory === 'all' ? '' : selectedCategory,
+        limit: 12
+      };
+      
+      const response = await axios.get('http://localhost:5000/api/videos', { params });
+      setVideos(response.data.videos);
+    } catch (error) {
+      toast.error('Failed to load videos');
+      console.error('Error fetching videos:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchCategories = async () => {
+    try {
+      const response = await axios.get('http://localhost:5000/api/videos/categories');
+      setCategories(['all', ...response.data.categories]);
+    } catch (error) {
+      setCategories(['all', 'Education', 'Entertainment', 'Technology', 'Music', 'Gaming']);
+    }
+  };
+
+  const fetchStats = async () => {
+    // Mock stats for demo
+    setStats({
+      totalViews: 124856,
+      totalVideos: 48,
+      totalUsers: 5248,
+      totalEarnings: 24580
+    });
+  };
+
+  const formatNumber = (num) => {
+    if (num >= 1000000) {
+      return `${(num / 1000000).toFixed(1)}M`;
+    }
+    if (num >= 1000) {
+      return `${(num / 1000).toFixed(1)}K`;
+    }
+    return num.toString();
+  };
+
+  return (
+    <div className="home-page">
+      {/* Hero Section */}
+      <div className="hero-section">
+        <div className="hero-overlay"></div>
+        <div className="hero-content">
+          <h1 className="hero-title">
+            Create, Share & Monetize
+            <span className="highlight"> Your Videos</span>
+          </h1>
+          <p className="hero-subtitle">
+            Everything you need to build and grow your video channel. 
+            Upload, analyze, and earn from your content.
+          </p>
+          <div className="hero-buttons">
+            <Link to="/upload" className="btn btn-primary btn-large">
+              <Play />
+              Start Uploading
+            </Link>
+            <Link to="/subscription" className="btn btn-secondary btn-large">
+              <Sparkles />
+              Go Premium
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats Section */}
+      <div className="stats-section">
+        <div className="container">
+          <div className="stats-grid">
+            <div className="stat-card">
+              <div className="stat-icon views">👁️</div>
+              <h3>{formatNumber(stats.totalViews)}</h3>
+              <p>Total Views</p>
+            </div>
+            <div className="stat-card">
+              <div className="stat-icon videos">🎬</div>
+              <h3>{formatNumber(stats.totalVideos)}</h3>
+              <p>Videos Uploaded</p>
+            </div>
+            <div className="stat-card">
+              <div className="stat-icon users">👥</div>
+              <h3>{formatNumber(stats.totalUsers)}</h3>
+              <p>Content Creators</p>
+            </div>
+            <div className="stat-card">
+              <div className="stat-icon earnings">💰</div>
+              <h3>₹{formatNumber(stats.totalEarnings)}</h3>
+              <p>Earned by Creators</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="container">
+        {/* Category Filter */}
+        <div className="category-section">
+          <h2 className="section-title">
+            <TrendingUp />
+            Trending Now
+          </h2>
+          
+          <div className="category-filters">
+            {categories.map(category => (
+              <button
+                key={category}
+                className={`category-btn ${selectedCategory === category ? 'active' : ''}`}
+                onClick={() => setSelectedCategory(category)}
+              >
+                {category === 'all' ? 'All' : category}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Videos Grid */}
+        <div className="videos-section">
+          {loading ? (
+            <div className="loading-container">
+              <div className="spinner"></div>
+              <p>Loading videos...</p>
+            </div>
+          ) : videos.length > 0 ? (
+            <div className="videos-grid">
+              {videos.map(video => (
+                <VideoCard key={video._id} video={video} />
+              ))}
+            </div>
+          ) : (
+            <div className="no-videos">
+              <h3>No videos found</h3>
+              <p>Be the first to upload a video in this category!</p>
+              <Link to="/upload" className="btn btn-primary">
+                Upload Video
+              </Link>
+            </div>
+          )}
+        </div>
+
+        {/* Features Section */}
+        <div className="features-section">
+          <h2 className="section-title">Why Choose Our Platform?</h2>
+          <div className="features-grid">
+            <div className="feature-card">
+              <div className="feature-icon">⚡</div>
+              <h3>Fast Upload</h3>
+              <p>Upload videos up to 2GB with our optimized servers</p>
+            </div>
+            <div className="feature-card">
+              <div className="feature-icon">📊</div>
+              <h3>Detailed Analytics</h3>
+              <p>Track views, watch time, and audience demographics</p>
+            </div>
+            <div className="feature-card">
+              <div className="feature-icon">💰</div>
+              <h3>Monetization</h3>
+              <p>Earn revenue from ads and channel subscriptions</p>
+            </div>
+            <div className="feature-card">
+              <div className="feature-icon">🛡️</div>
+              <h3>Content Protection</h3>
+              <p>Advanced copyright protection and content management</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* CTA Section */}
+      <div className="cta-section">
+        <div className="container">
+          <h2>Ready to Start Your Video Journey?</h2>
+          <p>Join thousands of creators who are already earning from their content</p>
+          <div className="cta-buttons">
+            <Link to="/register" className="btn btn-primary btn-large">
+              Get Started Free
+            </Link>
+            <Link to="/subscription" className="btn btn-secondary btn-large">
+              View Pricing
+            </Link>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default HomePage;
