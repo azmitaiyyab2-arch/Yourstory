@@ -1,0 +1,166 @@
+const mongoose = require('mongoose');
+
+const videoSchema = new mongoose.Schema({
+    title: {
+        type: String,
+        required: [true, 'Title is required'],
+        trim: true,
+        minlength: [3, 'Title must be at least 3 characters'],
+        maxlength: [200, 'Title cannot exceed 200 characters']
+    },
+    description: {
+        type: String,
+        default: '',
+        maxlength: [5000, 'Description cannot exceed 5000 characters']
+    },
+    videoUrl: {
+        type: String,
+        required: [true, 'Video URL is required']
+    },
+    thumbnailUrl: {
+        type: String,
+        default: '/default-thumbnail.jpg'
+    },
+    duration: {
+        type: Number, // in seconds
+        required: true,
+        min: [1, 'Duration must be at least 1 second']
+    },
+    size: {
+        type: Number, // in bytes
+        required: true
+    },
+    format: {
+        type: String,
+        default: 'mp4'
+    },
+    resolution: {
+        type: String,
+        enum: ['240p', '360p', '480p', '720p', '1080p', '1440p', '2160p'],
+        default: '720p'
+    },
+    category: {
+        type: String,
+        enum: [
+            'Education', 'Entertainment', 'Technology', 'Music',
+            'Gaming', 'Sports', 'Lifestyle', 'News', 'Comedy',
+            'Film & Animation', 'Science & Technology', 'Howto & Style',
+            'Travel & Events', 'Autos & Vehicles', 'Pets & Animals',
+            'Nonprofits & Activism', 'People & Blogs', 'Other'
+        ],
+        default: 'Other'
+    },
+    tags: [{
+        type: String,
+        trim: true,
+        lowercase: true
+    }],
+    visibility: {
+        type: String,
+        enum: ['public', 'private', 'unlisted'],
+        default: 'public'
+    },
+    uploader: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+    },
+    stats: {
+        views: { type: Number, default: 0 },
+        likes: { type: Number, default: 0 },
+        dislikes: { type: Number, default: 0 },
+        comments: { type: Number, default: 0 },
+        shares: { type: Number, default: 0 },
+        watchTime: { type: Number, default: 0 } // in seconds
+    },
+    monetization: {
+        isMonetized: { type: Boolean, default: false },
+        cpm: { type: Number, default: 2.5 }, // Cost per thousand views in ₹
+        adBreaks: [{ type: Number }] // Timestamps for ads in seconds
+    },
+    processing: {
+        status: {
+            type: String,
+            enum: ['pending', 'processing', 'completed', 'failed'],
+            default: 'pending'
+        },
+        progress: { type: Number, default: 0 },
+        error: String,
+        processedAt: Date
+    },
+    metadata: {
+        width: Number,
+        height: Number,
+        fps: Number,
+        bitrate: Number,
+        codec: String,
+        aspectRatio: String
+    },
+    isFeatured: {
+        type: Boolean,
+        default: false
+    },
+    isApproved: {
+        type: Boolean,
+        default: true
+    },
+    uploadDate: {
+        type: Date,
+        default: Date.now
+    },
+    updatedAt: {
+        type: Date,
+        default: Date.now
+    }
+});
+
+// Indexes for better performance
+videoSchema.index({ uploader: 1, uploadDate: -1 });
+videoSchema.index({ category: 1, uploadDate: -1 });
+videoSchema.index({ tags: 1 });
+videoSchema.index({ title: 'text', description: 'text' });
+videoSchema.index({ visibility: 1 });
+videoSchema.index({ 'processing.status': 1 });
+
+// Update timestamp before saving
+videoSchema.pre('save', function(next) {
+    this.updatedAt = Date.now();
+    next();
+});
+
+// Virtual for formatted duration
+videoSchema.virtual('durationFormatted').get(function() {
+    const hours = Math.floor(this.duration / 3600);
+    const minutes = Math.floor((this.duration % 3600) / 60);
+    const seconds = this.duration % 60;
+    
+    if (hours > 0) {
+        return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+});
+
+// Virtual for formatted size
+videoSchema.virtual('sizeFormatted').get(function() {
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let size = this.size;
+    let unitIndex = 0;
+    
+    while (size >= 1024 && unitIndex < units.length - 1) {
+        size /= 1024;
+        unitIndex++;
+    }
+    
+    return `${size.toFixed(2)} ${units[unitIndex]}`;
+});
+
+// JSON transformation
+videoSchema.set('toJSON', {
+    virtuals: true,
+    transform: function(doc, ret) {
+        delete ret.__v;
+        return ret;
+    }
+});
+
+module.exports = mongoose.model('Video', videoSchema);
