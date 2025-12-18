@@ -1,0 +1,117 @@
+import React from 'react';
+import { NavLink } from 'react-router-dom';
+import { 
+  Home, 
+  Compass, 
+  Video, 
+  Users, 
+  BarChart2,
+  DollarSign,
+  Settings,
+  HelpCircle,
+  Film,
+  TrendingUp,
+  UploadCloud,
+  User
+} from 'react-icons/fa';
+
+const Sidebar = ({ isOpen }) => {
+  const navItems = [
+    { to: '/', icon: <Home />, label: 'Home' },
+    { to: '/explore', icon: <Compass />, label: 'Explore' },
+    { to: '/subscriptions', icon: <Video />, label: 'Subscriptions' },
+    { to: '/library', icon: <Film />, label: 'Library' },
+  ];
+
+  const creatorItems = [
+    { to: '/upload', icon: <UploadCloud />, label: 'Upload' },
+    { to: '/analytics', icon: <BarChart2 />, label: 'Analytics' },
+    { to: '/monetization', icon: <DollarSign />, label: 'Monetization' },
+    { to: '/channel', icon: <User />, label: 'My Channel' },
+  ];
+
+  const otherItems = [
+    { to: '/settings', icon: <Settings />, label: 'Settings' },
+    { to: '/help', icon: <HelpCircle />, label: 'Help' },
+  ];
+
+  return (
+    <aside className={`sidebar ${isOpen ? 'open' : 'collapsed'}`}>
+      <div className="sidebar-content">
+        <div className="sidebar-section">
+          <h3 className="section-title">Menu</h3>
+          <nav className="sidebar-nav">
+            {navItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) => 
+                  `nav-item ${isActive ? 'active' : ''}`
+                }
+              >
+                <span className="nav-icon">{item.icon}</span>
+                {isOpen && <span className="nav-label">{item.label}</span>}
+              </NavLink>
+            ))}
+          </nav>
+        </div>
+
+        {isOpen && (
+          <>
+            <div className="sidebar-divider"></div>
+            
+            <div className="sidebar-section">
+              <h3 className="section-title">Creator Studio</h3>
+              <nav className="sidebar-nav">
+                {creatorItems.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    className={({ isActive }) => 
+                      `nav-item ${isActive ? 'active' : ''}`
+                    }
+                  >
+                    <span className="nav-icon">{item.icon}</span>
+                    {isOpen && <span className="nav-label">{item.label}</span>}
+                  </NavLink>
+                ))}
+              </nav>
+            </div>
+
+            <div className="sidebar-divider"></div>
+
+            <div className="sidebar-section">
+              <h3 className="section-title">Other</h3>
+              <nav className="sidebar-nav">
+                {otherItems.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    className={({ isActive }) => 
+                      `nav-item ${isActive ? 'active' : ''}`
+                    }
+                  >
+                    <span className="nav-icon">{item.icon}</span>
+                    {isOpen && <span className="nav-label">{item.label}</span>}
+                  </NavLink>
+                ))}
+              </nav>
+            </div>
+
+            <div className="sidebar-footer">
+              <div className="subscription-info">
+                <h4>Upgrade to Pro</h4>
+                <p>Get advanced features</p>
+                <button className="btn btn-primary btn-small w-100 mt-2">
+                  Upgrade Now
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </aside>
+  );
+};
+
+export default Sidebar;
