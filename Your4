@@ -1,0 +1,134 @@
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+
+const userSchema = new mongoose.Schema({
+    name: {
+        type: String,
+        required: [true, 'Name is required'],
+        trim: true,
+        minlength: [2, 'Name must be at least 2 characters'],
+        maxlength: [50, 'Name cannot exceed 50 characters']
+    },
+    email: {
+        type: String,
+        required: [true, 'Email is required'],
+        unique: true,
+        lowercase: true,
+        trim: true,
+        match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please enter a valid email']
+    },
+    password: {
+        type: String,
+        required: [true, 'Password is required'],
+        minlength: [6, 'Password must be at least 6 characters']
+    },
+    channelName: {
+        type: String,
+        default: function() {
+            return `${this.name}'s Channel`;
+        },
+        trim: true,
+        maxlength: [100, 'Channel name cannot exceed 100 characters']
+    },
+    avatar: {
+        type: String,
+        default: 'https://ui-avatars.com/api/?name=User&background=random&color=fff'
+    },
+    bio: {
+        type: String,
+        default: '',
+        maxlength: [500, 'Bio cannot exceed 500 characters']
+    },
+    role: {
+        type: String,
+        enum: ['user', 'admin'],
+        default: 'user'
+    },
+    subscription: {
+        plan: {
+            type: String,
+            enum: ['free', 'basic', 'premium'],
+            default: 'free'
+        },
+        startDate: Date,
+        endDate: Date,
+        razorpaySubscriptionId: String,
+        status: {
+            type: String,
+            enum: ['active', 'inactive', 'cancelled'],
+            default: 'inactive'
+        }
+    },
+    stats: {
+        totalViews: { type: Number, default: 0 },
+        totalSubscribers: { type: Number, default: 0 },
+        totalVideos: { type: Number, default: 0 },
+        totalLikes: { type: Number, default: 0 },
+        totalComments: { type: Number, default: 0 },
+        totalEarnings: { type: Number, default: 0 }
+    },
+    socialLinks: {
+        youtube: String,
+        facebook: String,
+        twitter: String,
+        instagram: String,
+        website: String
+    },
+    isVerified: {
+        type: Boolean,
+        default: false
+    },
+    isActive: {
+        type: Boolean,
+        default: true
+    },
+    lastLogin: Date,
+    createdAt: {
+        type: Date,
+        default: Date.now
+    },
+    updatedAt: {
+        type: Date,
+        default: Date.now
+    }
+});
+
+// Hash password before saving
+userSchema.pre('save', async function(next) {
+    if (!this.isModified('password')) return next();
+    
+    try {
+        const salt = await bcrypt.genSalt(10);
+        this.password = await bcrypt.hash(this.password, salt);
+        next();
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Update timestamp before saving
+userSchema.pre('save', function(next) {
+    this.updatedAt = Date.now();
+    next();
+});
+
+// Compare password method
+userSchema.methods.comparePassword = async function(candidatePassword) {
+    return await bcrypt.compare(candidatePassword, this.password);
+};
+
+// Virtual for subscriber count
+userSchema.virtual('subscriberCount').get(function() {
+    return this.stats.totalSubscribers;
+});
+
+// JSON transformation to remove password
+userSchema.set('toJSON', {
+    transform: function(doc, ret) {
+        delete ret.password;
+        delete ret.__v;
+        return ret;
+    }
+});
+
+module.exports = mongoose.model('User', userSchema);
